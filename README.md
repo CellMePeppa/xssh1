@@ -1,70 +1,63 @@
 # encoding:utf-8
 import socket
-import concurrent.futures
+import select
 
 class Header:
-    """
-    用于读取和解析头信息
-    """
-    def __init__(self, client):
-        self.client = client
+    def __init__(self, conn):
+        self.conn = conn
         self.data = b''
-        self.method = ''
-        self.host = ''
-        self.port = 80
-        self.ssl = False
-        self.parse()
-
-    def parse(self):
-        data = self.client.recv(1024)
-        self.data += data
-        headers = data.decode().split('\r\n')
-        first_line = headers[0].split(' ')
-        if len(first_line) < 2:
-            return
-        self.method = first_line[0]
-        url = first_line[1]
-        if 'https://' in url:
-            self.ssl = True
-            self.host = url.split(':')[0][8:]
-            self.port = 443
-        else:
-            self.host = url.split(':')[0]
-            if len(url.split(':')) == 3:
-                self.port = int(url.split(':')[2].split('/')[0])
-        for h in headers[1:]:
-            if 'Host' in h:
-                self.host = h.split(' ')[1]
-                if ':' in self.host:
-                    self.host, self.port = self.host.split(':')
-                    self.port = int(self.port)
+        self.is_ssl_ = False
+        while True:
+            try:
+                header = self.conn.recv(1)
+                self.data += header
+                if self.data[-4:] == b'\r\n\r\n':
+                    break
+            except:
                 break
 
     def is_ssl(self):
-        return self.ssl
+        return self.is_ssl_
 
     def get_method(self):
-        return self.method
+        return self.data[:self.data.index(b' ')].decode()
+
+    def get_host(self):
+        index = self.data.find(b'Host: ')
+        if index == -1:
+            return None
+        index += 6
+        end = self.data.find(b'\r\n', index)
+        host = self.data[index:end].decode()
+        return host
+
+    def get_port(self):
+        if self.is_ssl():
+            return 443
+        else:
+            host = self.get_host()
+            if not host:
+                return None
+            port_index = host.find(':')
+            if port_index == -1:
+                return 80
+            else:
+                return int(host[port_index+1:])
 
     def get_host_info(self):
-        return self.host, self.port
+        host = self.get_host()
+        if not host:
+            return None
+        port = self.get_port()
+        if not port:
+            return None
+        ip = socket.gethostbyname(host)
+        if not ip:
+            return None
+        if self.is_ssl():
+            self.is_ssl_ = True
+        return (ip, port)
 
-
-def communicate(sock1, sock2):
-    """
-    socket之间的数据交换
-    :param sock1:
-    :param sock2:
-    :return:
-    """
-    try:
-        while 1:
-            data = sock1.recv(1024)
-            if not data:
-                return
-            sock2.sendall(data)
-    except:
-        pass
 
 def handle(client):
     """
@@ -94,6 +87,16 @@ def handle(client):
         server.close()
         client.close()
 
+def communicate(src, dest):
+    while True:
+        readable, _, _ = select.select([src], [], [], 3)
+        if not readable:
+            break
+        data = src.recv(8096)
+        if not data:
+            break
+        dest.sendall(data)
+
 def serve(ip, port):
     """
     代理服务
@@ -106,10 +109,15 @@ def serve(ip, port):
         s.bind((ip, port))
         s.listen(10)
         print('proxy start...')
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-            while True:
-                conn, addr = s.accept()
-                executor.submit(handle, conn)
+        inputs = [s]
+        while True:
+            readable, _, _ = select.select(inputs, [], [])
+            for conn in readable:
+                if conn is s:
+                    client, addr = s.accept()
+                    inputs.append(client)
+                else:
+                    handle(conn)
 
 if __name__ == '__main__':
     IP = "0.0.0.0"
