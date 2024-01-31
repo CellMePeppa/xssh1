@@ -1,89 +1,53 @@
 # encoding:utf-8
 import socket
-import _thread
-
+import concurrent.futures
 
 class Header:
     """
     用于读取和解析头信息
     """
+    def __init__(self, client):
+        self.client = client
+        self.data = b''
+        self.method = ''
+        self.host = ''
+        self.port = 80
+        self.ssl = False
+        self.parse()
 
-    def __init__(self, conn):
-        self._method = None
-        header = b''
-        try:
-            while 1:
-                data = conn.recv(4096)
-                header = b"%s%s" % (header, data)
-                if header.endswith(b'\r\n\r\n') or (not data):
-                    break
-        except:
-            pass
-        self._header = header
-        self.header_list = header.split(b'\r\n')
-        self._host = None
-        self._port = None
-
-    def get_method(self):
-        """
-        获取请求方式
-        :return:
-        """
-        if self._method is None:
-            self._method = self._header[:self._header.index(b' ')]
-        return self._method
-
-    def get_host_info(self):
-        """
-        获取目标主机的ip和端口
-        :return:
-        """
-        if self._host is None:
-            method = self.get_method()
-            line = self.header_list[0].decode('utf8')
-            if method == b"CONNECT":
-                host = line.split(' ')[1]
-                if ':' in host:
-                    host, port = host.split(':')
-                else:
-                    port = 443
-            else:
-                for i in self.header_list:
-                    if i.startswith(b"Host:"):
-                        host = i.split(b" ")
-                        if len(host) < 2:
-                            continue
-                        host = host[1].decode('utf8')
-                        break
-                else:
-                    host = line.split('/')[2]
-                if ':' in host:
-                    host, port = host.split(':')
-                else:
-                    port = 80
-            self._host = host
-            self._port = int(port)
-        return self._host, self._port
-
-    @property
-    def data(self):
-        """
-        返回头部数据
-        :return:
-        """
-        return self._header
+    def parse(self):
+        data = self.client.recv(1024)
+        self.data += data
+        headers = data.decode().split('\r\n')
+        first_line = headers[0].split(' ')
+        if len(first_line) < 2:
+            return
+        self.method = first_line[0]
+        url = first_line[1]
+        if 'https://' in url:
+            self.ssl = True
+            self.host = url.split(':')[0][8:]
+            self.port = 443
+        else:
+            self.host = url.split(':')[0]
+            if len(url.split(':')) == 3:
+                self.port = int(url.split(':')[2].split('/')[0])
+        for h in headers[1:]:
+            if 'Host' in h:
+                self.host = h.split(' ')[1]
+                if ':' in self.host:
+                    self.host, self.port = self.host.split(':')
+                    self.port = int(self.port)
+                break
 
     def is_ssl(self):
-        """
-        判断是否为 https协议
-        :return:
-        """
-        if self.get_method() == b'CONNECT':
-            return True
-        return False
+        return self.ssl
 
-    def __repr__(self):
-        return str(self._header.decode("utf8"))
+    def get_method(self):
+        return self.method
+
+    def get_host_info(self):
+        return self.host, self.port
 
 
 def communicate(sock1, sock2):
@@ -101,7 +65,6 @@ def communicate(sock1, sock2):
             sock2.sendall(data)
     except:
         pass
-
 
 def handle(client):
     """
@@ -123,14 +86,13 @@ def handle(client):
         if header.is_ssl():
             data = b"HTTP/1.0 200 Connection Established\r\n\r\n"
             client.sendall(data)
-            _thread.start_new_thread(communicate, (client, server))
+            communicate(client, server)
         else:
             server.sendall(header.data)
         communicate(server, client)
     except:
         server.close()
         client.close()
-
 
 def serve(ip, port):
     """
@@ -139,15 +101,15 @@ def serve(ip, port):
     :param port:
     :return:
     """
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    s.bind((ip, port))
-    s.listen(10)
-    print('proxy start...')
-    while True:
-        conn, addr = s.accept()
-        _thread.start_new_thread(handle, (conn,))
-
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind((ip, port))
+        s.listen(10)
+        print('proxy start...')
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            while True:
+                conn, addr = s.accept()
+                executor.submit(handle, conn)
 
 if __name__ == '__main__':
     IP = "0.0.0.0"
