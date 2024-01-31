@@ -1,119 +1,155 @@
-# -*- coding: utf-8 -*-
+# encoding:utf-8
 import socket
-import ssl
+import _thread
 
-def proxy_server():
-    # 创建套接字并监听端口
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.bind(('0.0.0.0', 8000))
-    server_socket.listen(1)
-    print('Proxy server is listening on port 8000...')
 
-    while True:
-        # 接收客户端连接
+class Header:
+    """
+    用于读取和解析头信息
+    """
+
+    def __init__(self, conn):
+        self._method = None
+        header = b''
         try:
-            client_socket, client_addr = server_socket.accept()
-        except Exception as e:
-            print('Error accepting connection:', e)
-            continue
-        print('Accepted connection from', client_addr)
+            while 1:
+                data = conn.recv(4096)
+                header = b"%s%s" % (header, data)
+                if header.endswith(b'\r\n\r\n') or (not data):
+                    break
+        except:
+            pass
+        self._header = header
+        self.header_list = header.split(b'\r\n')
+        self._host = None
+        self._port = None
 
-        # 接收客户端请求
-        try:
-            request_data = client_socket.recv(1024)
-        except Exception as e:
-            print('Error receiving data from client:', e)
-            client_socket.close()
-            continue
-        print('Received request:\n', request_data)
+    def get_method(self):
+        """
+        获取请求方式
+        :return:
+        """
+        if self._method is None:
+            self._method = self._header[:self._header.index(b' ')]
+        return self._method
 
-        # 解析请求
-        try:
-            first_line = request_data.split(b'\r\n')[0]
-            method, url, version = first_line.split()
-        except Exception as e:
-            print('Error parsing request:', e)
-            response_data = b'HTTP/1.1 400 Bad Request\r\n\r\n'
-            client_socket.sendall(response_data)
-            client_socket.close()
-            continue
-
-        if method == b'CONNECT':
-            # 处理HTTPS请求
-            try:
-                hostname, port = url.decode().split(':')
-                target_addr = (hostname, int(port))
-                target_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                target_socket.settimeout(5.0)  # 设置连接超时为5秒
-                target_socket.connect(target_addr)
-            except Exception as e:
-                print('Error connecting to target server:', e)
-                response_data = b'HTTP/1.1 502 Bad Gateway\r\n\r\n'
-                client_socket.sendall(response_data)
-                client_socket.close()
-                continue
-            try:
-                client_socket.sendall(b'HTTP/1.1 200 Connection Established\r\n\r\n')
-                context = ssl.create_default_context()
-                ssl_client_socket = context.wrap_socket(client_socket, server_side=True)
-                ssl_target_socket = context.wrap_socket(target_socket, server_hostname=hostname)
-                # 在代理服务器和目标服务器之间进行转发
-                try:
-                    forward_traffic(ssl_client_socket, ssl_target_socket)
-                except Exception as e:
-                    print('Error forwarding data between client and server:', e)
-                finally:
-                    ssl_client_socket.close()
-                    ssl_target_socket.close()
-            except Exception as e:
-                print('Error forwarding data between client and server:', e)
-                ssl_client_socket.close()
-                ssl_target_socket.close()
-        else:
-            # 处理HTTP请求
-            _, _, hostname, path = url.decode().split('/', 3)
-            target_addr = (hostname, 80)
-            target_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            target_socket.settimeout(5.0)  # 设置连接超时为5秒
-            try:
-                target_socket.connect(target_addr)
-            except Exception as e:
-                print('Error connecting to target server:', e)
-                response_data = b'HTTP/1.1 502 Bad Gateway\r\n\r\n'
-                client_socket.sendall(response_data)
-                client_socket.close()
-                continue
-            try:
-                target_socket.sendall(request_data)
-                # 接收响应
-                response_data = b''
-                while True:
-                    recv_data = target_socket.recv(1024)
-                    if not recv_data:
-                        break
-                    response_data += recv_data
-                    client_socket.sendall(recv_data)
-                target_socket.close()
-            except Exception as e:
-                print('Error forwarding data between client and server:', e)
-                target_socket.close()
-
-        # 关闭客户端套接字
-        client_socket.close()
-
-def forward_traffic(source, destination):
-    while True:
-        try:
-            data = source.recv(1024)
-            if data:
-                destination.sendall(data)
+    def get_host_info(self):
+        """
+        获取目标主机的ip和端口
+        :return:
+        """
+        if self._host is None:
+            method = self.get_method()
+            line = self.header_list[0].decode('utf8')
+            if method == b"CONNECT":
+                host = line.split(' ')[1]
+                if ':' in host:
+                    host, port = host.split(':')
+                else:
+                    port = 443
             else:
-                break
-        except Exception as e:
-            print('Error forwarding data between client and server:', e)
-            source.close()
-            destination.close()
-            break
+                for i in self.header_list:
+                    if i.startswith(b"Host:"):
+                        host = i.split(b" ")
+                        if len(host) < 2:
+                            continue
+                        host = host[1].decode('utf8')
+                        break
+                else:
+                    host = line.split('/')[2]
+                if ':' in host:
+                    host, port = host.split(':')
+                else:
+                    port = 80
+            self._host = host
+            self._port = int(port)
+        return self._host, self._port
+
+    @property
+    def data(self):
+        """
+        返回头部数据
+        :return:
+        """
+        return self._header
+
+    def is_ssl(self):
+        """
+        判断是否为 https协议
+        :return:
+        """
+        if self.get_method() == b'CONNECT':
+            return True
+        return False
+
+    def __repr__(self):
+        return str(self._header.decode("utf8"))
+
+
+def communicate(sock1, sock2):
+    """
+    socket之间的数据交换
+    :param sock1:
+    :param sock2:
+    :return:
+    """
+    try:
+        while 1:
+            data = sock1.recv(1024)
+            if not data:
+                return
+            sock2.sendall(data)
+    except:
+        pass
+
+
+def handle(client):
+    """
+    处理连接进来的客户端
+    :param client:
+    :return:
+    """
+    timeout = 60
+    client.settimeout(timeout)
+    header = Header(client)
+    if not header.data:
+        client.close()
+        return
+    print(*header.get_host_info(), header.get_method())
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        server.connect(header.get_host_info())
+        server.settimeout(timeout)
+        if header.is_ssl():
+            data = b"HTTP/1.0 200 Connection Established\r\n\r\n"
+            client.sendall(data)
+            _thread.start_new_thread(communicate, (client, server))
+        else:
+            server.sendall(header.data)
+        communicate(server, client)
+    except:
+        server.close()
+        client.close()
+
+
+def serve(ip, port):
+    """
+    代理服务
+    :param ip:
+    :param port:
+    :return:
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind((ip, port))
+    s.listen(10)
+    print('proxy start...')
+    while True:
+        conn, addr = s.accept()
+        _thread.start_new_thread(handle, (conn,))
+
 
 if __name__ == '__main__':
-    proxy_server()
+    IP = "0.0.0.0"
+    PORT = 25432
+    serve(IP, PORT)
