@@ -152,3 +152,4 @@ def serve(ip, port):
 if __name__ == '__main__':
     IP = "0.0.0.0"
     PORT = 25432
+    serve(IP, PORT)
