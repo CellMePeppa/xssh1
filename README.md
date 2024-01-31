@@ -72,10 +72,10 @@ def handle(client):
         client.close()
         return
     print(header.get_host_info(), header.get_method())
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    r = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        server.connect(header.get_host_info())
-        server.settimeout(timeout)
+        r.connect(header.get_host_info())
+        r.settimeout(timeout)
         if header.is_ssl():
             data = b"HTTP/1.0 200 Connection Established\r\n\r\n"
             client.sendall(data)
@@ -104,12 +104,13 @@ def serve(ip, port):
     :param port:
     :return:
     """
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.bind((ip, port))
-        s.listen(10)
-        print('proxy start...')
-        inputs = [s]
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind((ip, port))
+    s.listen(10)
+    print('proxy start...')
+    inputs = [s]
+    try:
         while True:
             readable, _, _ = select.select(inputs, [], [])
             for conn in readable:
@@ -118,6 +119,8 @@ def serve(ip, port):
                     inputs.append(client)
                 else:
                     handle(conn)
+    finally:
+        s.close()
 
 if __name__ == '__main__':
     IP = "0.0.0.0"
