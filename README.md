@@ -71,7 +71,7 @@ def handle(client):
     if not header.data:
         client.close()
         return
-    print(*header.get_host_info(), header.get_method())
+    print(header.get_host_info(), header.get_method())
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         server.connect(header.get_host_info())
