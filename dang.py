@@ -5,7 +5,87 @@ from gevent import socket, monkey
 monkey.patch_all()
 
 class Header:
-    # ... (与之前相同)
+    """
+    用于读取和解析头信息
+    """
+
+    def __init__(self, conn):
+        self._method = None
+        header = b''
+        try:
+            while 1:
+                data = conn.recv(4096)
+                header = b"%s%s" % (header, data)
+                if header.endswith(b'\r\n\r\n') or (not data):
+                    break
+        except:
+            pass
+        self._header = header
+        self.header_list = header.split(b'\r\n')
+        self._host = None
+        self._port = None
+
+    def get_method(self):
+        """
+        获取请求方式
+        :return:
+        """
+        if self._method is None:
+            self._method = self._header[:self._header.index(b' ')]
+        return self._method
+
+    def get_host_info(self):
+        """
+        获取目标主机的ip和端口
+        :return:
+        """
+        if self._host is None:
+            method = self.get_method()
+            line = self.header_list[0].decode('utf8')
+            if method == b"CONNECT":
+                host = line.split(' ')[1]
+                if ':' in host:
+                    host, port = host.split(':')
+                else:
+                    port = 443
+            else:
+                for i in self.header_list:
+                    if i.startswith(b"Host:"):
+                        host = i.split(b" ")
+                        if len(host) < 2:
+                            continue
+                        host = host[1].decode('utf8')
+                        break
+                else:
+                    host = line.split('/')[2]
+                if ':' in host:
+                    host, port = host.split(':')
+                else:
+                    port = 80
+            self._host = host
+            self._port = int(port)
+        return self._host, self._port
+
+    @property
+    def data(self):
+        """
+        返回头部数据
+        :return:
+        """
+        return self._header
+
+    def is_ssl(self):
+        """
+        判断是否为 https协议
+        :return:
+        """
+        if self.get_method() == b'CONNECT':
+            return True
+        return False
+
+    def __repr__(self):
+        return str(self._header.decode("utf8"))
+
 
 def communicate(sock1, sock2):
     try:
