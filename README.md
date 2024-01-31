@@ -3,7 +3,7 @@ import socket
 def proxy_server():
     # 创建套接字并监听端口
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.bind(('localhost', 8000))
+    server_socket.bind(('0.0.0.0', 81230))
     server_socket.listen(1)
     print 'Proxy server is listening on port 8000...'
 
